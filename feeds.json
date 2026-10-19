@@ -1,0 +1,37 @@
+{
+  "window_hours": 30,
+  "max_items_per_category": 7,
+  "categories": [
+    {
+      "key": "tech",
+      "title": "💻 Tech",
+      "feeds": [
+        "https://hnrss.org/frontpage?points=200",
+        "https://techcrunch.com/feed/",
+        "https://www.theverge.com/rss/index.xml",
+        "https://arstechnica.com/feed/"
+      ]
+    },
+    {
+      "key": "ai",
+      "title": "🤖 AI",
+      "feeds": [
+        "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "https://www.technologyreview.com/topic/artificial-intelligence/feed",
+        "https://openai.com/news/rss.xml",
+        "https://huggingface.co/blog/feed.xml",
+        "https://simonwillison.net/atom/everything/"
+      ]
+    },
+    {
+      "key": "security",
+      "title": "🔐 Security",
+      "feeds": [
+        "https://feeds.feedburner.com/TheHackersNews",
+        "https://www.bleepingcomputer.com/feed/",
+        "https://krebsonsecurity.com/feed/",
+        "https://www.darkreading.com/rss.xml"
+      ]
+    }
+  ]
+}
