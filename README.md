@@ -4,7 +4,7 @@
 GitHub Actions에서 돌아가서 **서버도, 비용도 필요 없어요**. Python 표준 라이브러리만 써요.
 
 ```
-RSS 피드 13개 ──▶ digest.py ──▶ 최근 30시간 + 중복 제거 ──▶ (선택) Claude 한국어 요약 ──▶ Slack 채널 N개
+RSS 피드 13개 ──▶ digest.py ──▶ 최근 30시간 + 중복 제거 ──▶ 한국어 번역·요약(무료) ──▶ Slack 채널 N개
                     ▲                                                                    │
                     └──────────── state/seen.json (보낸 기사 기록, 14일 보관) ◀──────────────┘
 ```
@@ -26,7 +26,10 @@ RSS 피드 13개 ──▶ digest.py ──▶ 최근 30시간 + 중복 제거 �
 | 이름 | 값 |
 |---|---|
 | `SLACK_WEBHOOK_URLS` | 위에서 복사한 URL. **여러 채널이면 한 줄에 하나씩** |
-| `ANTHROPIC_API_KEY` | (선택) 넣으면 기사마다 한국어 한 줄 요약이 붙어요 |
+| `GEMINI_API_KEY` | 한국어 번역용 (무료). https://aistudio.google.com/apikey 에서 발급, 카드 등록 불필요 |
+| `ANTHROPIC_API_KEY` | (선택, 유료) Claude로 번역하고 싶을 때만. 있으면 Gemini 대신 사용 |
+
+> 번역 키가 없거나 번역이 실패하면(한도 초과 등) 그날은 원문(영어)으로 발송돼요.
 
 ### 4. 테스트
 **Actions → Daily Tech Digest → Run workflow**

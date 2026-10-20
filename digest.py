@@ -8,8 +8,7 @@
                        (구독 채널/워크스페이스 하나당 URL 하나)
   한국어 번역/요약 (아래 중 하나만 있으면 동작, 위쪽이 우선)
   ANTHROPIC_API_KEY    (선택, 유료) Claude로 번역. ANTHROPIC_MODEL 기본값 claude-haiku-4-5
-  GITHUB_TOKEN         (무료) GitHub Actions에서 자동 제공. GitHub Models로 번역.
-                       GITHUB_MODEL 기본값 openai/gpt-4o-mini
+  GEMINI_API_KEY       (선택, 무료 티어) Google AI Studio 키. GEMINI_MODEL 기본값 gemini-flash-lite-latest
 
 사용법
   python digest.py              # 수집 -> Slack 발송 -> state/seen.json 갱신
@@ -205,34 +204,42 @@ def _post_json(url: str, body: dict, headers: dict, timeout: int = 90) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(body).encode(), headers={"content-type": "application/json", **headers}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:  # 원인을 로그에 남김 (키 오류, 한도 초과 등)
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"JSON이 아닌 응답: {raw[:300]!r}") from None
 
 
 def _ask_llm(prompt: str) -> str | None:
-    """사용 가능한 LLM에 질문. 우선순위: Anthropic(유료) -> GitHub Models(무료)."""
+    """사용 가능한 LLM에 질문. 우선순위: Anthropic(유료) -> Gemini(무료 티어)."""
     if key := os.environ.get("ANTHROPIC_API_KEY"):
         data = _post_json(
             "https://api.anthropic.com/v1/messages",
             {
-                "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
+                "model": os.environ.get("ANTHROPIC_MODEL") or "claude-haiku-4-5",
                 "max_tokens": 3000,
                 "messages": [{"role": "user", "content": prompt}],
             },
             {"x-api-key": key, "anthropic-version": "2023-06-01"},
         )
         return data["content"][0]["text"]
-    if token := os.environ.get("GITHUB_TOKEN"):
+    if key := os.environ.get("GEMINI_API_KEY"):
+        model = os.environ.get("GEMINI_MODEL") or "gemini-flash-lite-latest"
         data = _post_json(
-            "https://models.github.ai/inference/chat/completions",
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             {
-                "model": os.environ.get("GITHUB_MODEL", "openai/gpt-4o-mini"),
-                "max_tokens": 3000,
-                "messages": [{"role": "user", "content": prompt}],
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 3000},
             },
-            {"Authorization": f"Bearer {token}"},
+            {"x-goog-api-key": key},
         )
-        return data["choices"][0]["message"]["content"]
+        return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
     return None
 
 

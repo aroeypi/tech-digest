@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: write   # state/seen.json 커밋용
-  models: read      # GitHub Models(무료 LLM)로 한국어 번역
 
 concurrency:
   group: daily-digest
@@ -24,17 +23,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Build & send digest
         env:
           SLACK_WEBHOOK_URLS: ${{ secrets.SLACK_WEBHOOK_URLS }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 선택(유료). 없으면 아래 무료 모델 사용
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}             # 자동 제공, 등록 불필요
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}         # 한국어 번역 (무료 티어)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 선택(유료). 있으면 Gemini 대신 사용
         run: |
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             python digest.py --dry-run
