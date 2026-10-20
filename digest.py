@@ -6,8 +6,10 @@
 환경 변수
   SLACK_WEBHOOK_URLS   Slack Incoming Webhook URL. 여러 개는 줄바꿈 또는 쉼표로 구분.
                        (구독 채널/워크스페이스 하나당 URL 하나)
-  ANTHROPIC_API_KEY    (선택) 있으면 각 기사에 한국어 한 줄 요약을 붙입니다.
-  ANTHROPIC_MODEL      (선택) 요약 모델. 기본값 claude-haiku-4-5
+  한국어 번역/요약 (아래 중 하나만 있으면 동작, 위쪽이 우선)
+  ANTHROPIC_API_KEY    (선택, 유료) Claude로 번역. ANTHROPIC_MODEL 기본값 claude-haiku-4-5
+  GITHUB_TOKEN         (무료) GitHub Actions에서 자동 제공. GitHub Models로 번역.
+                       GITHUB_MODEL 기본값 openai/gpt-4o-mini
 
 사용법
   python digest.py              # 수집 -> Slack 발송 -> state/seen.json 갱신
@@ -47,6 +49,8 @@ class Item:
     source: str
     published: datetime | None
     summary: str = ""
+    title_ko: str = ""
+    translated: bool = False
 
     @property
     def key(self) -> str:
@@ -187,47 +191,75 @@ def select(items: list[Item], seen: dict, since: datetime, limit: int) -> list[I
     return picked
 
 
-# ---------------------------------------------------------------- optional AI summary
+# ---------------------------------------------------------------- Korean translation / summary
 
-def summarize_ko(sections: dict[str, list[Item]]) -> None:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return
-    flat = [it for items in sections.values() for it in items]
-    if not flat:
-        return
-    listing = "\n".join(
-        f"{n}. {it.title}\n   {it.summary[:250]}" for n, it in enumerate(flat, 1)
-    )
-    prompt = (
-        "다음은 오늘의 tech/AI/security 뉴스 목록입니다. 각 항목을 한국어로 "
-        "핵심만 담아 한 문장(60자 이내)으로 요약하세요. 과장 없이 사실만 쓰세요.\n"
-        'JSON 배열로만 답하세요. 형식: [{"n": 1, "ko": "..."}, ...]\n\n' + listing
-    )
-    body = json.dumps({
-        "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
-        "max_tokens": 2000,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode()
+PROMPT = (
+    "다음은 오늘의 tech/AI/security 뉴스 목록입니다. 각 항목마다\n"
+    "1) title: 기사 제목을 자연스러운 한국어로 번역 (고유명사·제품명은 원문 유지)\n"
+    "2) ko: 핵심 내용을 한국어 한 문장(70자 이내)으로 요약. 과장 없이 사실만.\n"
+    '반드시 JSON 배열로만 답하세요. 형식: [{"n": 1, "title": "...", "ko": "..."}, ...]\n\n'
+)
+
+
+def _post_json(url: str, body: dict, headers: dict, timeout: int = 90) -> dict:
     req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=body,
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
+        url, data=json.dumps(body).encode(), headers={"content-type": "application/json", **headers}
     )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            text = json.load(resp)["content"][0]["text"]
-        rows = json.loads(text[text.index("["): text.rindex("]") + 1])
-        for r in rows:
-            n = int(r["n"])
-            if 1 <= n <= len(flat):
-                flat[n - 1].summary = "🇰🇷 " + clean_text(str(r["ko"]), 140)
-    except Exception as exc:  # 요약 실패 시 원문 요약으로 발송
-        print(f"[warn] summary failed: {exc}", file=sys.stderr)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def _ask_llm(prompt: str) -> str | None:
+    """사용 가능한 LLM에 질문. 우선순위: Anthropic(유료) -> GitHub Models(무료)."""
+    if key := os.environ.get("ANTHROPIC_API_KEY"):
+        data = _post_json(
+            "https://api.anthropic.com/v1/messages",
+            {
+                "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
+                "max_tokens": 3000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            {"x-api-key": key, "anthropic-version": "2023-06-01"},
+        )
+        return data["content"][0]["text"]
+    if token := os.environ.get("GITHUB_TOKEN"):
+        data = _post_json(
+            "https://models.github.ai/inference/chat/completions",
+            {
+                "model": os.environ.get("GITHUB_MODEL", "openai/gpt-4o-mini"),
+                "max_tokens": 3000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            {"Authorization": f"Bearer {token}"},
+        )
+        return data["choices"][0]["message"]["content"]
+    return None
+
+
+def translate_ko(sections: dict[str, list[Item]]) -> None:
+    """카테고리별로 나눠 요청 (무료 모델의 요청당 토큰 제한 대응)."""
+    for items in sections.values():
+        if not items:
+            continue
+        listing = "\n".join(
+            f"{n}. {it.title}\n   {it.summary[:250]}" for n, it in enumerate(items, 1)
+        )
+        try:
+            text = _ask_llm(PROMPT + listing)
+            if text is None:
+                print("[info] LLM 키가 없어 원문(영어)으로 발송합니다.", file=sys.stderr)
+                return
+            rows = json.loads(text[text.index("["): text.rindex("]") + 1])
+            for r in rows:
+                n = int(r["n"])
+                if 1 <= n <= len(items):
+                    if r.get("title"):
+                        items[n - 1].title_ko = clean_text(str(r["title"]), 200)
+                    if r.get("ko"):
+                        items[n - 1].summary = clean_text(str(r["ko"]), 160)
+                        items[n - 1].translated = True
+        except Exception as exc:  # 번역 실패 시 원문으로 발송
+            print(f"[warn] 번역 실패 (원문으로 발송): {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------- slack
@@ -251,8 +283,8 @@ def build_message(sections: list[tuple[str, list[Item]]], today: datetime) -> di
             continue
         lines = []
         for it in items:
-            t = esc(it.title).replace("|", "¦")
-            line = f"• <{it.link}|{t}>  _{esc(it.source)}_"
+            t = esc(it.title_ko or it.title).replace("|", "¦")
+            line = f"• *<{it.link}|{t}>*  _{esc(it.source)}_"
             if it.summary:
                 line += f"\n    {esc(clean_text(it.summary, 160))}"
             lines.append(line)
@@ -315,7 +347,7 @@ def main() -> int:
         used.update(i.key for i in picked)  # 카테고리 간 중복 제거
         sections[cat["title"]] = picked
 
-    summarize_ko(sections)
+    translate_ko(sections)
     payload = build_message(list(sections.items()), now.astimezone(KST))
 
     if args.dry_run:
